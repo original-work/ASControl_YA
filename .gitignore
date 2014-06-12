@@ -1,0 +1,16 @@
+*.o
+Insight/ASControl_YA.IAB
+CVS/Entries
+CVS/Repository
+CVS/Root
+Insight/ASControl_YA.IAD
+Insight/ASControl_YA.IMB
+Insight/ASControl_YA.IMD
+Insight/ASControl_YA.PFI
+Insight/ASControl_YA.PO
+Insight/ASControl_YA.PR
+Insight/ASControl_YA.PRI
+Insight/ASControl_YA.PS
+Insight/ASControl_YA.SearchResults
+Insight/ASControl_YA.WK3
+ASControl_YA.rar

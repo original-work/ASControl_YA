@@ -1,0 +1,274 @@
+#!/bin/bash
+
+#
+# ASControl        This starts and stops ASControl.
+# put this file to /etc/init.d/
+#
+#
+
+[ -r /etc/profile.d/ASControlenv.sh ] || exit 1
+. /etc/profile.d/ASControlenv.sh
+
+SYSPATH="$RMLROOT"
+
+rm_nice=19
+
+log_days=5
+cdr_days=60
+vox_days=60
+
+# base=`basename $0`
+# NOT use above express
+ASControlbase="ASControl"
+
+[ -d "${SYSPATH}" ] || exit 1
+
+[ -x /etc/init.d/"$ASControlbase" ] || exit 1
+
+
+if [ ! -x "${SYSPATH}"/bin/ASControl.sh ] ;then
+	exit 1
+fi
+
+start_cron() {
+	echo "MAILTO=\"\"" >/tmp/ASControlcron.tmp
+	crontab -u root -l | grep -v "/${ASControlbase} " | grep -v "MAILTO" |grep -v "# " >> /tmp/ASControlcron.tmp
+	echo "* * * * * /etc/init.d/$ASControlbase verify" >> /tmp/ASControlcron.tmp
+	echo "0 2 * * * /etc/init.d/$ASControlbase clearlog" >> /tmp/ASControlcron.tmp
+	crontab -u root /tmp/ASControlcron.tmp
+	rm -f /tmp/ASControlcron.tmp
+}
+
+stop_cron(){
+	crontab -u root -l|grep -v "/${ASControlbase} "|grep -v "# " > /tmp/ASControlcron.tmp
+	crontab -u root /tmp/ASControlcron.tmp
+	rm -f /tmp/ASControlcron.tmp
+}
+
+stop_verify_cron_only(){
+	crontab -u root -l|grep -v "$ASControlbase verify"|grep -v "# " > /tmp/ASControlcron.tmp
+	crontab -u root /tmp/ASControlcron.tmp
+	rm -f /tmp/ASControlcron.tmp
+}
+
+start(){
+	if [ $# = 0 ] || [ $1 != "noncron" ] ;then
+		stop_cron
+	fi
+	${SYSPATH}/bin/ASControl.sh start
+	[ "$?"  -eq 0 ] || return 1
+
+	if [ $# = 0 ] || [ $1 != "noncron" ] ;then
+		start_cron
+	fi
+
+	touch /var/lock/subsys/ASControl
+
+    return 0
+}
+
+stop(){
+
+	RC=0
+
+	if [ $# = 0 ] || [ $1 != "noncron" ] ;then
+		stop_cron
+	fi
+
+	
+	${SYSPATH}/bin/ASControl.sh stop
+	[ "$?"  -eq 0 ] || RC=1
+
+	[ $RC = 0 ] && rm -f /var/lock/subsys/ASControl
+	
+    return $RC
+}
+
+verify(){
+	if ! ${SYSPATH}/bin/ASControl.sh status > /dev/null 2>&1 ;then
+		/sbin/initlog -n "$ASControlbase" -s "ASControl is down, try to start it"
+		stop noncron
+		sleep 5
+		start noncron
+	fi
+
+	return 0
+}
+
+get_log_day()
+{
+#format=1: 	log_days=5
+#		 	log-days=5
+#			LOG_DAYS=5
+#			LOG-DAYS=5
+#format=2:  LOG_DAYS 5
+	if [ "$#" != 2 ] ; then
+		echo $"$0: Usage: $0 format config_file"
+		return 1
+	fi
+	local tmp
+	# tmp=`cat $1 | grep "^log_days"`
+	tmp=`cat $2 | egrep "^log_days|^LOG-DAYS|^log-days|^LOG-DAYS"`
+	tmp=${tmp#*=}
+	tmp=${tmp%%;*}
+	tmp=${tmp%%#*}
+	if [ $1 = "2" ] ;then
+		tmp=`echo $tmp | cut -d" " -f2`
+	fi
+	tmp=`echo $tmp | grep "^[0-9]*$"`
+	[ -z "${tmp:-}" ] && return 1
+	echo $tmp
+	return 0
+}
+
+get_cdr_day()
+{
+#format=1: 	cdr_days=60
+#		 	cdr-days=60
+#			CDR_DAYS=60
+#			CDR-DAYS=60
+#format=2:  CDR_DAYS 60
+	if [ "$#" != 2 ] ; then
+		echo $"$0: Usage: $0 format config_file"
+		return 1
+	fi
+	local tmp
+	# tmp=`cat $1 | grep "^cdr_days"`
+	tmp=`cat $2 | egrep "^cdr_days|^CDR_DAYS|^cdr-days|^CDR-DAYS"`
+	tmp=${tmp#*=}
+	tmp=${tmp%%;*}
+	tmp=${tmp%%#*}
+	if [ $1 = "2" ] ;then
+		tmp=`echo $tmp | cut -d" " -f2`
+	fi
+	tmp=`echo $tmp | grep "^[0-9]*$"`
+	[ -z "${tmp:-}" ] && return 1
+	echo $tmp
+	return 0
+}
+
+day_duration()
+{
+	if [ "$#" != 2 ] ; then
+		echo $"$0: Usage: $0 seconds_start seconds_end"
+		return 1
+	fi
+	echo $(( ($2 - $1)/86400 ))
+	return 0
+}
+
+clearlog()
+{
+
+	if [ -r ${SYSPATH}/cfg/system.cfg ] ;then
+		tmp=`get_log_day 1 ${SYSPATH}/cfg/system.cfg`	
+		[ $? -eq 0 ] && log_days=$tmp 
+	fi
+
+	if [ -d ${SYSPATH}/log ] ;then
+		if [ `ls ${SYSPATH}/log/ | grep "^RML" | wc -l` -ne 0 ] ;then
+			for logfile in ${SYSPATH}/log/RML*
+			do
+				baselog=`basename $logfile`
+				logdate=${baselog:3:8}
+				seconds_start=`date -d $logdate +%s`
+				seconds_end=`date +%s`	
+				days=`day_duration $seconds_start $seconds_end`
+				[ $days -ge $log_days ] && nice -$rm_nice rm -f $logfile
+			done
+		fi
+
+		if [ `ls ${SYSPATH}/log/ | grep "^TFC" | wc -l` -ne 0 ] ;then
+			for logfile in ${SYSPATH}/log/TFC*
+			do
+				baselog=`basename $logfile`
+				logdate=${baselog:3:8}
+				seconds_start=`date -d $logdate +%s`
+				seconds_end=`date +%s`	
+				days=`day_duration $seconds_start $seconds_end`
+				[ $days -ge $log_days ] && nice -$rm_nice rm -f $logfile
+			done
+		fi
+	fi
+
+	return 0
+}
+
+clearcdr()
+{
+
+	if [ -r ${SYSPATH}/cfg/system.cfg ] ;then
+		tmp=`get_cdr_day 1 ${SYSPATH}/cfg/system.cfg`	
+		[ $? -eq 0 ] && cdr_days=$tmp 
+	fi
+
+	if [ -d ${SYSPATH}/log ] ;then
+		if [ `ls ${SYSPATH}/log/ | grep "^CDR" | wc -l` -ne 0 ] ;then
+			for logfile in ${SYSPATH}/log/CDR*
+			do
+				baselog=`basename $logfile`
+				logdate=${baselog:3:8}
+				seconds_start=`date -d $logdate +%s`
+				seconds_end=`date +%s`	
+				days=`day_duration $seconds_start $seconds_end`
+				[ $days -ge $cdr_days ] && nice -$rm_nice rm -f $logfile
+			done
+		fi
+	fi
+
+	return 0
+}
+
+if [ "$1" != "function" ] ;then
+	RETVAL=0
+	# See how we were called.
+	case "$1" in
+		start)
+		echo $"      Starting ASControl"
+		/sbin/initlog -n "$ASControlbase" -s "Starting ASControl"
+		start
+		RETVAL=$?	
+		[ $RETVAL -eq 0 ] && \
+			echo $"      ASControl started successfully" || \
+			echo $"      Failed start ASControl"
+		[ $RETVAL -eq 0 ] && \
+			/sbin/initlog -n "$ASControlbase" -s "ASControl started successfully" || \
+			/sbin/initlog -n "$ASControlbase" -s "Failed start ASControl"
+		;;
+	
+		stop)
+		echo $"      Stopping ASControl"
+		/sbin/initlog -n "$ASControlbase" -s "Stopping ASControl"
+		stop
+		RETVAL=$?	
+		[ $RETVAL -eq 0 ] && \
+			echo $"      ASControl stopped successfully" || \
+			echo $"      Failed stop ASControl"
+		[ $RETVAL -eq 0 ] && \
+			/sbin/initlog -n "$ASControlbase" -s "ASControl stopped successfully" || \
+			/sbin/initlog -n "$ASControlbase" -s "Failed stop ASControl"
+		;;
+
+		stopcron) 
+		stop_cron 
+		RETVAL=$?  
+		;;
+	
+		verify)
+		verify
+		RETVAL=$?	
+		;;
+	
+		clearlog)
+		clearlog
+		clearcdr
+		RETVAL=$?
+		;;
+	
+		*)
+		echo $"Usage: $0 {start|stop|verify|clearlog|function}"
+		RETVAL=1
+	esac
+	exit $RETVAL
+fi
+
